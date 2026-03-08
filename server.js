@@ -243,17 +243,35 @@ loadPrivateData().then(() => {
                 } else if (parsed.clientContent && parsed.clientContent.action === 'startRecording') {
                     console.log(`[PROXY] Human override activated. Pausing Round-Robin.`);
                     isHumanSpeaking = true;
-                    // Immediately send turnComplete to the active agent to interrupt their ongoing speech
-                    if (agentSockets[activeAgentIndex] && agentSockets[activeAgentIndex].readyState === WebSocket.OPEN) {
-                        agentSockets[activeAgentIndex].send(JSON.stringify({ clientContent: { turnComplete: true } }));
-                    }
+                    // We don't need to manually send an interrupt payload. The native
+                    // realtimeInput audio chunks from the human's mic will automatically
+                    // halt Gemini's Voice output the moment they arrive.
                     return;
                 } else if (parsed.clientContent && parsed.clientContent.action === 'stopRecording') {
                     console.log(`[PROXY] Human override ended. Passing turn back to Active Agent.`);
                     isHumanSpeaking = false;
-                    // Explicitly tell the active Gemini agent the human turn is over so they can respond
+                    
+                    // Explicitly tell the active Gemini agent the human audio stream finished.
                     if (agentSockets[activeAgentIndex] && agentSockets[activeAgentIndex].readyState === WebSocket.OPEN) {
                         agentSockets[activeAgentIndex].send(JSON.stringify({ clientContent: { turnComplete: true } }));
+                    }
+                    return;
+                } else if (parsed.clientContent && parsed.clientContent.action === 'sendText') {
+                    console.log(`[PROXY] Human submitted text: "${parsed.clientContent.text}"`);
+                    isHumanSpeaking = false;
+                    
+                    // Explicitly tell the active Gemini agent the human typed a message
+                    if (agentSockets[activeAgentIndex] && agentSockets[activeAgentIndex].readyState === WebSocket.OPEN) {
+                        const humanTextTrigger = {
+                            clientContent: {
+                                turns: [{
+                                    role: "user",
+                                    parts: [{ text: `The human user just interrupted and typed this message to the room: "${parsed.clientContent.text}". Respond directly to them right now. Keep it under 2 sentences.` }]
+                                }],
+                                turnComplete: true
+                            }
+                        };
+                        agentSockets[activeAgentIndex].send(JSON.stringify(humanTextTrigger));
                     }
                     return;
                 } else if (parsed.clientContent && parsed.clientContent.action === 'audioFinished') {

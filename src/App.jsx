@@ -214,7 +214,38 @@ function App() {
   };
 
   const [interimTranscript, setInterimTranscript] = useState('');
+  const [textInput, setTextInput] = useState('');
   const recognitionRef = useRef(null);
+
+  const handleSendText = (e) => {
+      e.preventDefault();
+      if (!textInput.trim() || !ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+
+      // Instantly kill ongoing AI voice playback so they stop talking over us
+      if (playbackAudioContext.current) {
+          playbackAudioContext.current.close();
+          playbackAudioContext.current = null;
+      }
+      audioQueueTime.current = 0; // Reset queue time
+
+      ws.current.send(JSON.stringify({ 
+          clientContent: { 
+              action: 'sendText', 
+              text: textInput 
+          } 
+      }));
+
+      setMessages(prev => [...prev, {
+          id: Date.now() + Math.random(),
+          sender: 'Deepak (Associate)',
+          role: 'human',
+          initials: 'D',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          text: textInput
+      }]);
+
+      setTextInput('');
+  };
 
   const startDebate = async () => {
        try {
@@ -552,44 +583,87 @@ function App() {
                   }}>
                   ▶️ Start Autonomous Debate
                </button>
-            ) : isRecording ? (
-               <button 
-                  onClick={stopRecording}
-                  style={{ 
-                    background: 'rgba(248, 113, 113, 0.2)', 
-                    color: 'var(--danger)', 
-                    border: '1px solid var(--danger)', 
-                    borderRadius: '24px', 
-                    padding: '0.75rem 2rem', 
-                    cursor: 'pointer', 
-                    fontWeight: 600, 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    gap: '0.5rem',
-                    transition: 'all 0.2s' 
-                  }}>
-                  <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--danger)', display: 'inline-block', animation: 'pulse 1.5s infinite' }}></span>
-                  Stop Overriding
-               </button>
             ) : (
-               <button 
-                  onClick={startRecording}
-                  style={{ 
-                    background: 'var(--accent-primary)', 
-                    color: 'white', 
-                    border: 'none', 
-                    borderRadius: '24px', 
-                    padding: '0.75rem 2rem', 
-                    cursor: 'pointer', 
-                    fontWeight: 600, 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    gap: '0.5rem',
-                    transition: 'all 0.2s',
-                    boxShadow: '0 4px 14px 0 rgba(94, 106, 210, 0.39)'
-                  }}>
-                  🎙️ Interject & Speak
-               </button>
+               <form onSubmit={handleSendText} style={{ display: 'flex', width: '100%', gap: '10px', alignItems: 'center' }}>
+                   <input 
+                      type="text" 
+                      value={textInput}
+                      onChange={(e) => setTextInput(e.target.value)}
+                      placeholder="Type a message to the War Room..."
+                      style={{ 
+                          flex: 1, 
+                          background: 'rgba(255,255,255,0.05)', 
+                          border: '1px solid var(--glass-border)', 
+                          color: 'white', 
+                          padding: '0.75rem 1rem', 
+                          borderRadius: '24px',
+                          outline: 'none',
+                          fontSize: '0.95rem'
+                      }}
+                   />
+                   <button 
+                      type="submit"
+                      disabled={!textInput.trim()}
+                      style={{ 
+                          background: textInput.trim() ? 'var(--accent-primary)' : 'rgba(255,255,255,0.1)', 
+                          color: textInput.trim() ? 'white' : 'rgba(255,255,255,0.3)', 
+                          border: 'none', 
+                          borderRadius: '50%', 
+                          width: '42px', 
+                          height: '42px', 
+                          display: 'flex', 
+                          justifyContent: 'center', 
+                          alignItems: 'center',
+                          cursor: textInput.trim() ? 'pointer' : 'not-allowed', 
+                          transition: 'all 0.2s',
+                          boxShadow: textInput.trim() ? '0 4px 14px 0 rgba(94, 106, 210, 0.39)' : 'none',
+                          flexShrink: 0
+                      }}>
+                      ↗️
+                   </button>
+                   {isRecording ? (
+                       <button 
+                          type="button"
+                          onClick={stopRecording}
+                          style={{ 
+                            background: 'rgba(248, 113, 113, 0.2)', 
+                            color: 'var(--danger)', 
+                            border: '1px solid var(--danger)', 
+                            borderRadius: '24px', 
+                            padding: '0.75rem 1.5rem', 
+                            cursor: 'pointer', 
+                            fontWeight: 600, 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: '0.5rem',
+                            transition: 'all 0.2s',
+                            flexShrink: 0
+                          }}>
+                          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--danger)', display: 'inline-block', animation: 'pulse 1.5s infinite' }}></span>
+                          Stop Mic
+                       </button>
+                    ) : (
+                       <button 
+                          type="button"
+                          onClick={startRecording}
+                          style={{ 
+                            background: 'rgba(255,255,255,0.1)', 
+                            color: 'white', 
+                            border: '1px solid rgba(255,255,255,0.2)', 
+                            borderRadius: '24px', 
+                            padding: '0.75rem 1.5rem', 
+                            cursor: 'pointer', 
+                            fontWeight: 600, 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: '0.5rem',
+                            transition: 'all 0.2s',
+                            flexShrink: 0
+                          }}>
+                          🎙️ Talk
+                       </button>
+                    )}
+               </form>
             )}
           </div>
         </div>
