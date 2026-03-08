@@ -7,11 +7,42 @@ function App() {
   const [isRecording, setIsRecording] = useState(false);
   const isRecordingRef = useRef(false);
   const [hasStartedDebate, setHasStartedDebate] = useState(false);
-  const [activePersona, setActivePersona] = useState('Financial Analyst');
-  const activePersonaRef = useRef('Financial Analyst');
+  const [activePersona, setActivePersona] = useState('Meridian (FA)');
+  const activePersonaRef = useRef('Meridian (FA)');
   const [isConnected, setIsConnected] = useState(false);
   const [insights, setInsights] = useState([]);
   const [chartData, setChartData] = useState(null);
+  const [isGeneratingMemo, setIsGeneratingMemo] = useState(false);
+
+  const generateMemo = async () => {
+      setIsGeneratingMemo(true);
+      try {
+          const fullTranscript = messages.map(m => `${m.sender}: ${m.text}`).join('\n');
+          const res = await fetch('http://localhost:3001/api/generate-memo', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ transcript: fullTranscript })
+          });
+          
+          if (!res.ok) throw new Error("Failed to generate memo");
+          
+          const blob = await res.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          a.download = 'IC_Memo.pdf';
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+      } catch (err) {
+          console.error(err);
+          alert("Error generating IC Memo");
+      } finally {
+          setIsGeneratingMemo(false);
+      }
+  };
 
   // ---- Server Boot Polling ----
   const [serverStatus, setServerStatus] = useState({
@@ -53,10 +84,10 @@ function App() {
   const accumulatedSpeechRef = useRef('');
 
   const personas = {
-    'Financial Analyst': "You are an expert private equity financial analyst reviewing a deal in a live war room. Focus on revenue, margins, and EBITDA. Only speak out loud. Keep answers under 2 sentences.",
-    'Legal Champion': "You are an aggressive corporate lawyer looking for risks in the MSA and contracts. Focus on termination clauses and liabilities. Only speak out loud. Keep answers under 2 sentences.",
-    'Market Analyst (Pessimist)': "You are a pessimistic market analyst. You always bring up macro risks and competitor threats. Only speak out loud. Keep answers under 2 sentences.",
-    'Optimist': "You are an optimistic growth equity associate. You focus on expansion, cross-sell opportunities, and retention. Only speak out loud. Keep answers under 2 sentences."
+    'Meridian (FA)': "PERSONA 1: FINANCIAL ANALYST (FA)\nName: \"Meridian\"\nTone: Precise, data-driven, dry wit, number-first\nIcon/Color: 📊 / Blue\n\nMandate:\n•  Analyze all financial data from uploaded Excel models and PDFs\n•  Benchmark every metric (revenue, EBITDA, margins, LTV, cap rates, IRR, MOIC, debt service, etc.) against current Dubai real estate industry standards\n•  Build and stress-test financial projections; identify key value drivers and destroys\n•  Assess capital requirements, funding structure, and exit scenarios\n•  When asked, generate charts, tables, and graphs in the interactive panel (waterfall charts, sensitivity analyses, IRR bridges, etc.)\n•  Pull live financial data from news sources to contextualize projections\n\nKey behaviors:\n•  Never quote a number without a benchmark or source\n•  Always state assumptions explicitly\n•  Flag when projections seem unrealistic; provide a \"grounded\" alternative\n•  Initiate analysis with: \"Let me run the numbers on this.\"",
+    'Lexara (LC)': "PERSONA 2: LEGAL CHAMPION (LC)\nName: \"Lexara\"\nTone: Cautious, thorough, formal, occasionally alarming\nIcon/Color: ⚖️ / Dark Red\n\nMandate:\n•  Identify all legal risks: past/pending litigation, regulatory non-compliance, contractual obligations, IP issues, environmental liabilities\n•  Analyze uploaded legal documents: contracts, agreements, licenses, permits, corporate structure documents\n•  Flag any DIFC, RERA, DLD regulatory issues specific to Dubai real estate\n•  Assess AML/KYC compliance, ownership structures, cross-border legal considerations\n•  Search the web for recent legal actions, regulatory updates, or compliance news related to the company and Dubai real estate law\n•  Generate risk matrices and legal flag summaries in the interactive panel\n\nKey behaviors:\n•  Never give a clean bill of health without caveats\n•  Always distinguish between \"identified risk,\" \"potential risk,\" and \"red flag\"\n•  Reference specific legal frameworks (UAE Commercial Companies Law, RERA regulations, etc.)\n•  Initiate analysis with: \"From a legal standpoint, here's what requires immediate attention.\"",
+    'Vantage (MA)': "PERSONA 3: MARKET ANALYST (MA)\nName: \"Vantage\"\nTone: Curious, trend-obsessed, conversational, contextually rich\nIcon/Color: 🌐 / Teal\n\nMandate:\n•  Analyze Dubai real estate market conditions: supply/demand dynamics, pricing trends, absorption rates, developer sentiment, foreign investment flows\n•  Assess consumer behavior, buyer demographics, rental vs. ownership trends\n•  Evaluate the company's competitive positioning relative to peers (pricing, product, distribution, brand)\n•  Monitor macroeconomic signals: UAE GDP, tourism, expo legacy, infrastructure, oil price correlation\n•  Actively search YouTube for recent videos from analysts, news outlets (Bloomberg, Reuters, CNBC Arabia, Zawya) about Dubai real estate\n•  Search the web for recent market reports (JLL, CBRE, Knight Frank, Savills Dubai) and news\n•  Generate market maps, competitive landscapes, and trend charts in the interactive panel\n\nKey behaviors:\n•  Contextualize every data point within the broader market narrative\n•  Identify tailwinds AND headwinds — never one-sided\n•  Always timestamp market data to flag recency\n•  Initiate analysis with: \"Here's what the market is telling us right now.\"",
+    'Apollo (OPT)': "PERSONA 4: THE OPTIMIST (OPT)\nName: \"Apollo\"\nTone: Enthusiastic, persuasive, intellectually honest, contrarian\nIcon/Color: 🚀 / Gold\n\nMandate:\n•  Construct the bull case: best-realistic-scenario outcome if the deal performs as hoped\n•  Counter specific downsides raised by FA, LC, and MA with data-backed rebuttals\n•  Identify optionality, upside surprises, and asymmetric return scenarios\n•  Highlight strategic value beyond financials: brand, platform, network effects, market timing\n•  Generate upside scenario models, bull case sensitivity tables in the interactive panel\n•  Search the web and YouTube for positive signals: capital inflows, celebrity endorsements, policy tailwinds, comparable deal successes\n\nKey behaviors:\n•  Never deny a risk — reframe it with mitigation or upside offset\n•  Ground optimism in data and plausible scenarios, not wishful thinking\n•  Challenge the group when pessimism becomes groupthink\n•  Initiate contributions with: \"Let me steelman the bull case here.\""
   };
 
   const initWebSocket = () => {
@@ -87,7 +118,9 @@ function App() {
 
         if (parsed.type === 'insightData') {
              console.log("[DEBUG] Received Insight Data:", parsed.data);
-             if (parsed.data.insights && parsed.data.insights.length > 0) {
+             if (parsed.data.keyFacts && parsed.data.keyFacts.length > 0) {
+                 setInsights(parsed.data.keyFacts);
+             } else if (parsed.data.insights && parsed.data.insights.length > 0) {
                  setInsights(parsed.data.insights);
              }
              if (parsed.data.chartData) {
@@ -713,7 +746,14 @@ function App() {
       <div className="column right-panel glass-panel animate-fade-in" style={{ animationDelay: '200ms', display: 'flex', flexDirection: 'column' }}>
          <div style={{ display: 'flex', borderBottom: '1px solid var(--glass-border)' }}>
            <button style={{ flex: 1, padding: '1rem', background: 'transparent', border: 'none', borderBottom: '2px solid var(--accent-primary)', color: 'white', fontWeight: 500, cursor: 'pointer', transition: 'background 0.2s' }}>Interactive Context</button>
-           <button style={{ flex: 1, padding: '1rem', background: 'transparent', border: 'none', color: 'var(--text-secondary)', fontWeight: 500, cursor: 'pointer', transition: 'background 0.2s' }}>Draft Memo</button>
+           <button onClick={generateMemo} disabled={isGeneratingMemo} style={{ flex: 1, padding: '1rem', background: 'transparent', border: 'none', color: isGeneratingMemo ? 'var(--text-muted)' : 'var(--text-secondary)', fontWeight: 500, cursor: isGeneratingMemo ? 'not-allowed' : 'pointer', transition: 'background 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+              {isGeneratingMemo ? (
+                  <>
+                      <span style={{ width: '12px', height: '12px', borderRadius: '50%', border: '2px solid var(--text-muted)', borderTopColor: 'transparent', animation: 'spin 1s linear infinite' }} className="spinner"></span>
+                      Generating...
+                  </>
+              ) : 'Draft Memo (PDF)'}
+           </button>
          </div>
 
          <div style={{ flex: 1, padding: '1.5rem', overflowY: 'auto' }}>
@@ -774,15 +814,16 @@ function App() {
             {/* Dynamic Key Elements Section */}
             {insights.length > 0 && (
                 <>
-                    <h3 style={{ fontSize: '1rem', fontWeight: 500, marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      Key Elements
-                      <span style={{ fontSize: '0.75rem', background: 'rgba(52, 211, 153, 0.2)', color: 'var(--success)', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>Live Inference</span>
+                    <h3 style={{ fontSize: '1rem', fontWeight: 500, marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      Key Model Inferences
+                      <span style={{ fontSize: '0.75rem', background: 'rgba(52, 211, 153, 0.2)', color: 'var(--success)', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>Logged Value</span>
                     </h3>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem', background: 'rgba(255,255,255,0.02)', padding: '1rem', borderRadius: '8px', borderLeft: '2px solid var(--accent-primary)' }}>
                         {insights.map((insight, idx) => (
-                            <div key={idx} style={{ background: 'rgba(255,255,255,0.03)', padding: '0.75rem 1rem', borderRadius: '8px', borderLeft: '3px solid var(--success)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{insight.label}</span>
-                                <span style={{ fontSize: '0.95rem', fontWeight: 600, color: 'white' }}>{insight.value}</span>
+                            <div key={idx} style={{ display: 'flex', gap: '0.5rem', fontFamily: 'monospace', fontSize: '0.9rem' }}>
+                                <span style={{ color: 'var(--text-secondary)' }}>{typeof insight === 'string' ? "Insight" : insight.label}</span>
+                                <span style={{ color: 'var(--text-muted)' }}>=</span>
+                                <span style={{ color: 'var(--success)', fontWeight: 600 }}>{typeof insight === 'string' ? insight : insight.value}</span>
                             </div>
                         ))}
                     </div>
