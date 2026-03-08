@@ -47,6 +47,7 @@ function App() {
   const messagesEndRef = useRef(null);
   const pendingTextRef = useRef('');
   const interruptIdRef = useRef(0); // Add a sequence ID to track interruptions
+  const accumulatedSpeechRef = useRef('');
 
   const personas = {
     'Financial Analyst': "You are an expert private equity financial analyst reviewing a deal in a live war room. Focus on revenue, margins, and EBITDA. Only speak out loud. Keep answers under 2 sentences.",
@@ -254,6 +255,7 @@ function App() {
       audioQueueTime.current = 0; // Reset queue time
       pendingTextRef.current = ''; // Wipe whatever text they were generating
       interruptIdRef.current += 1; // Block pending audio/UI timeouts from executing
+      accumulatedSpeechRef.current = ''; // Clear the speech accumulator
 
       ws.current.send(JSON.stringify({
           clientContent: {
@@ -311,6 +313,7 @@ function App() {
     audioQueueTime.current = 0; // Reset queue time
     pendingTextRef.current = ''; // Wipe whatever text they were secretly generating
     interruptIdRef.current += 1; // Block pending audio/UI timeouts from executing
+    accumulatedSpeechRef.current = ''; // Reset the speech tracking accumulator
     
     startAudioCapture();
   };
@@ -339,8 +342,12 @@ function App() {
                   let final = "";
                   let interim = "";
                   for (let i = event.resultIndex; i < event.results.length; ++i) {
-                      if (event.results[i].isFinal) final += event.results[i][0].transcript;
-                      else interim += event.results[i][0].transcript;
+                      if (event.results[i].isFinal) {
+                          final += event.results[i][0].transcript;
+                          accumulatedSpeechRef.current += event.results[i][0].transcript + ' ';
+                      } else {
+                          interim += event.results[i][0].transcript;
+                      }
                   }
                   setInterimTranscript(interim);
 
@@ -415,7 +422,12 @@ function App() {
 
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
         console.log("[DEBUG] Sending stop sequence to Proxy.");
-        ws.current.send(JSON.stringify({ clientContent: { action: 'stopRecording' } }));
+        ws.current.send(JSON.stringify({ 
+            clientContent: { 
+                action: 'stopRecording',
+                text: accumulatedSpeechRef.current.trim()
+            } 
+        }));
     }
 
     console.log("[DEBUG] Recording paused. Microphone graph kept hot for seamless resume.");

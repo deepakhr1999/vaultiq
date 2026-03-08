@@ -104,10 +104,10 @@ loadPrivateData().then(() => {
         console.log('Client connected to proxy server.');
 
         const personas = [
-            { id: 'finance', name: 'Financial Analyst', voice: 'Puck', prompt: 'You are an expert private equity financial analyst reviewing a deal in a live war room. You must provide expert inferences, do not just regurgitate raw data. You MUST explicitly state the exact filename you are sourcing data from (e.g. "According to the Q3_Financials sheet..."). Focus on revenue, margins, and EBITDA trends. Keep answers under 3 sentences given the live setting.' },
-            { id: 'legal', name: 'Legal Counsel', voice: 'Aoede', prompt: 'You are an aggressive corporate lawyer looking for risks in the MSA. You must provide expert legal inferences and identify hidden risks, do not just read the text. You MUST explicitly state the exact filename you are sourcing data from (e.g. "According to the Master_Service_Agreement..."). Focus on termination clauses and liabilities. Keep answers under 3 sentences given the live setting.' },
-            { id: 'risk', name: 'Risk Modeler', voice: 'Charon', prompt: 'You are a pessimistic market analyst. You must synthesize the data to point out macro risks and competitor threats, do not just recite facts. You MUST explicitly state the exact filename you are sourcing data from. Keep answers under 3 sentences given the live setting.' },
-            { id: 'growth', name: 'Growth Associate', voice: 'Kore', prompt: 'You are an optimistic growth equity associate. You must infer expansion, cross-sell opportunities, and retention strategies from the data, do not regurgitate it. You MUST explicitly state the exact filename you are sourcing data from. Keep answers under 3 sentences given the live setting.' }
+            { id: 'finance', name: 'Financial Analyst', voice: 'Puck', prompt: 'You are an expert private equity financial analyst reviewing a deal in a live war room. You must provide expert inferences, do not just regurgitate raw data. You MUST explicitly state the exact filename you are sourcing data from (e.g. "According to the Q3_Financials sheet..."). Focus on revenue, margins, and EBITDA trends. Your spoken audio MUST EXACTLY match your generated text word-for-word. Keep your response strictly under 100 words.' },
+            { id: 'legal', name: 'Legal Counsel', voice: 'Aoede', prompt: 'You are an aggressive corporate lawyer looking for risks in the MSA. You must provide expert legal inferences and identify hidden risks, do not just read the text. You MUST explicitly state the exact filename you are sourcing data from (e.g. "According to the Master_Service_Agreement..."). Focus on termination clauses and liabilities. Your spoken audio MUST EXACTLY match your generated text word-for-word. Keep your response strictly under 100 words.' },
+            { id: 'risk', name: 'Risk Modeler', voice: 'Charon', prompt: 'You are a pessimistic market analyst. You must synthesize the data to point out macro risks and competitor threats, do not just recite facts. You MUST explicitly state the exact filename you are sourcing data from. Your spoken audio MUST EXACTLY match your generated text word-for-word. Keep your response strictly under 100 words.' },
+            { id: 'growth', name: 'Growth Associate', voice: 'Kore', prompt: 'You are an optimistic growth equity associate. You must infer expansion, cross-sell opportunities, and retention strategies from the data, do not regurgitate it. You MUST explicitly state the exact filename you are sourcing data from. Your spoken audio MUST EXACTLY match your generated text word-for-word. Keep your response strictly under 100 words.' }
         ];
 
         let activeAgentIndex = 0;
@@ -115,6 +115,35 @@ loadPrivateData().then(() => {
         const agentSockets = [];
         const messageQueues = [[], [], [], []];
         let currentTurnTranscript = "";
+
+        async function routeQueryToAgent(query) {
+            if (!query || query.trim().length === 0) return null;
+            try {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+                const ids = personas.map(p => p.id).join(', ');
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{
+                            role: 'user',
+                            parts: [{ text: `You are an intelligent routing agent. Based on the human's query, output EXACTLY ONE word corresponding to the best agent to answer from this list: [${ids}]. \n\nQuery: "${query}"` }]
+                        }],
+                        generationConfig: { temperature: 0.1 }
+                    })
+                });
+                
+                const data = await response.json();
+                const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim().toLowerCase() || '';
+                const matchedIndex = personas.findIndex(p => rawText.includes(p.id.toLowerCase()));
+                
+                if (matchedIndex !== -1) return matchedIndex;
+            } catch (e) {
+                console.error("[PROXY] LLM Router failed: ", e);
+            }
+            return null;
+        }
 
         // Connect 4 websockets
         personas.forEach((persona, index) => {
@@ -210,7 +239,7 @@ loadPrivateData().then(() => {
         // Wait for explicit kickOff signal from the frontend before starting
 
         // Handle incoming signals from frontend client
-        clientWs.on('message', (data) => {
+        clientWs.on('message', async (data) => {
             try {
                 const parsed = JSON.parse(data);
                 
@@ -248,13 +277,30 @@ loadPrivateData().then(() => {
                     console.log(`[PROXY] Human override ended. Passing turn back to Active Agent.`);
                     isHumanSpeaking = false;
                     
+                    const spokenText = parsed.clientContent.text || "";
+                    if (spokenText.trim().length > 0) {
+                        const newAgentIndex = await routeQueryToAgent(spokenText);
+                        if (newAgentIndex !== null && newAgentIndex !== activeAgentIndex) {
+                            console.log(`[PROXY] ROUTED: Switching from ${personas[activeAgentIndex].name} to ${personas[newAgentIndex].name} based on query.`);
+                            activeAgentIndex = newAgentIndex;
+                            if (clientWs.readyState === WebSocket.OPEN) {
+                                clientWs.send(JSON.stringify({ type: 'activeAgent', name: personas[activeAgentIndex].name, id: personas[activeAgentIndex].id }));
+                            }
+                        }
+                    }
+                    
                     // Explicitly tell the active Gemini agent the human audio stream finished and they MUST reply.
                     if (agentSockets[activeAgentIndex] && agentSockets[activeAgentIndex].readyState === WebSocket.OPEN) {
+                        const currentPersonaVoice = personas[activeAgentIndex].name;
+                        const textualContextTrigger = spokenText.trim().length > 0
+                            ? `I just finished speaking to the room, and the router assigned my question specifically to you (${currentPersonaVoice}). Drop your previous thought completely and respond directly to what I just said: "${spokenText}". From now on, ensure the ensuing debate stays focused on my new topic. Keep your response under 100 words.`
+                            : "I just finished speaking to you. Drop your previous thought completely, evaluate the audio I just sent, and respond directly to me. From now on, ensure the ensuing debate stays focused on my new topic.";
+
                         const humanOverrideTrigger = {
                             clientContent: {
                                 turns: [{
                                     role: "user",
-                                    parts: [{ text: "I just finished speaking to you. Drop your previous thought completely, evaluate the audio I just sent, and respond directly to me. From now on, ensure the ensuing debate stays focused on my new topic. Keep your response under 2 sentences." }]
+                                    parts: [{ text: textualContextTrigger }]
                                 }],
                                 turnComplete: true
                             }
@@ -268,13 +314,23 @@ loadPrivateData().then(() => {
                     // Wipe the currently unravelling AI transcript so it isn't passed to the next agent
                     currentTurnTranscript = "";
                     
+                    const newAgentIndex = await routeQueryToAgent(parsed.clientContent.text);
+                    if (newAgentIndex !== null && newAgentIndex !== activeAgentIndex) {
+                        console.log(`[PROXY] ROUTED TEXT: Switching from ${personas[activeAgentIndex].name} to ${personas[newAgentIndex].name} based on query.`);
+                        activeAgentIndex = newAgentIndex;
+                        if (clientWs.readyState === WebSocket.OPEN) {
+                            clientWs.send(JSON.stringify({ type: 'activeAgent', name: personas[activeAgentIndex].name, id: personas[activeAgentIndex].id }));
+                        }
+                    }
+
                     // Explicitly tell the active Gemini agent the human typed a message
                     if (agentSockets[activeAgentIndex] && agentSockets[activeAgentIndex].readyState === WebSocket.OPEN) {
+                        const currentPersonaVoice = personas[activeAgentIndex].name;
                         const humanTextTrigger = {
                             clientContent: {
                                 turns: [{
                                     role: "user",
-                                    parts: [{ text: `The human user just interrupted and typed this message to the room: "${parsed.clientContent.text}". Drop your previous thought completely and respond directly to them. Steer the ongoing debate to focus on their specific question. Keep it under 2 sentences.` }]
+                                    parts: [{ text: `The human user just interrupted and typed this message to the room. The router assigned it specifically to you (${currentPersonaVoice}): "${parsed.clientContent.text}". Drop your previous thought completely and respond directly to them. Steer the ongoing debate to focus on their specific question. Keep it under 100 words.` }]
                                 }],
                                 turnComplete: true
                             }
