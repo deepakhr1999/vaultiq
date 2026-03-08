@@ -238,6 +238,8 @@ loadPrivateData().then(() => {
                 } else if (parsed.clientContent && parsed.clientContent.action === 'startRecording') {
                     console.log(`[PROXY] Human override activated. Pausing Round-Robin.`);
                     isHumanSpeaking = true;
+                    // Wipe the currently unravelling AI transcript so it isn't passed to the next agent
+                    currentTurnTranscript = "";
                     // We don't need to manually send an interrupt payload. The native
                     // realtimeInput audio chunks from the human's mic will automatically
                     // halt Gemini's Voice output the moment they arrive.
@@ -252,7 +254,7 @@ loadPrivateData().then(() => {
                             clientContent: {
                                 turns: [{
                                     role: "user",
-                                    parts: [{ text: "I just finished speaking to you. Evaluate the audio I just sent and respond directly. Keep it under 2 sentences." }]
+                                    parts: [{ text: "I just finished speaking to you. Drop your previous thought completely, evaluate the audio I just sent, and respond directly to me. From now on, ensure the ensuing debate stays focused on my new topic. Keep your response under 2 sentences." }]
                                 }],
                                 turnComplete: true
                             }
@@ -263,6 +265,8 @@ loadPrivateData().then(() => {
                 } else if (parsed.clientContent && parsed.clientContent.action === 'sendText') {
                     console.log(`[PROXY] Human submitted text: "${parsed.clientContent.text}"`);
                     isHumanSpeaking = false;
+                    // Wipe the currently unravelling AI transcript so it isn't passed to the next agent
+                    currentTurnTranscript = "";
                     
                     // Explicitly tell the active Gemini agent the human typed a message
                     if (agentSockets[activeAgentIndex] && agentSockets[activeAgentIndex].readyState === WebSocket.OPEN) {
@@ -270,7 +274,7 @@ loadPrivateData().then(() => {
                             clientContent: {
                                 turns: [{
                                     role: "user",
-                                    parts: [{ text: `The human user just interrupted and typed this message to the room: "${parsed.clientContent.text}". Respond directly to them right now. Keep it under 2 sentences.` }]
+                                    parts: [{ text: `The human user just interrupted and typed this message to the room: "${parsed.clientContent.text}". Drop your previous thought completely and respond directly to them. Steer the ongoing debate to focus on their specific question. Keep it under 2 sentences.` }]
                                 }],
                                 turnComplete: true
                             }

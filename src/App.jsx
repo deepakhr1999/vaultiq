@@ -46,6 +46,7 @@ function App() {
   const scriptNode = useRef(null);
   const messagesEndRef = useRef(null);
   const pendingTextRef = useRef('');
+  const interruptIdRef = useRef(0); // Add a sequence ID to track interruptions
 
   const personas = {
     'Financial Analyst': "You are an expert private equity financial analyst reviewing a deal in a live war room. Focus on revenue, margins, and EBITDA. Only speak out loud. Keep answers under 2 sentences.",
@@ -91,7 +92,10 @@ function App() {
                  console.log(`[DEBUG] Audio will finish playing in ${delaySeconds.toFixed(1)} seconds. Blocking UI update until then.`);
 
                  // 1. Wait for audio to finish playing, then show the text blob
+                 const currentInterruptId = interruptIdRef.current;
                  setTimeout(() => {
+                     if (currentInterruptId !== interruptIdRef.current) return; // Abort if user interrupted during the delay
+
                      // Add the completed text to the UI
                      if (completedText.trim()) {
                          setMessages(prev => [...prev, {
@@ -103,9 +107,10 @@ function App() {
                              text: completedText
                          }]);
                      }
-
+                     
                      // 2. Add an explicit 2-second conversational pause before triggering the next agent
                      setTimeout(() => {
+                         if (currentInterruptId !== interruptIdRef.current) return; // Abort second delay if interrupted
                          if (ws.current && ws.current.readyState === WebSocket.OPEN) {
                              console.log(`[DEBUG] Conversation delay complete. Telling proxy to advance the debate.`);
                              ws.current.send(JSON.stringify({
@@ -116,16 +121,18 @@ function App() {
                              }));
                          }
                      }, 2000);
-
+                     
                  }, delaySeconds * 1000 + 500); // Add 500ms safety buffer
              } else {
                  // Fallback if audio never engaged
+                 const currentInterruptId = interruptIdRef.current;
                  if (completedText.trim()) {
                      setMessages(prev => [...prev, {
                          id: Date.now() + Math.random(), sender: parsed.name + ' AI', role: 'bot', initials: 'AI', time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), text: completedText
                      }]);
                  }
                  setTimeout(() => {
+                     if (currentInterruptId !== interruptIdRef.current) return;
                      if (ws.current && ws.current.readyState === WebSocket.OPEN) {
                          ws.current.send(JSON.stringify({ clientContent: { action: 'audioFinished', transcript: parsed.transcript } }));
                      }
@@ -245,6 +252,8 @@ function App() {
           playbackAudioContext.current = null;
       }
       audioQueueTime.current = 0; // Reset queue time
+      pendingTextRef.current = ''; // Wipe whatever text they were generating
+      interruptIdRef.current += 1; // Block pending audio/UI timeouts from executing
 
       ws.current.send(JSON.stringify({
           clientContent: {
@@ -300,7 +309,9 @@ function App() {
         playbackAudioContext.current = null;
     }
     audioQueueTime.current = 0; // Reset queue time
-
+    pendingTextRef.current = ''; // Wipe whatever text they were secretly generating
+    interruptIdRef.current += 1; // Block pending audio/UI timeouts from executing
+    
     startAudioCapture();
   };
 
