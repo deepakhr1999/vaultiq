@@ -49,3 +49,9 @@ I ahve added the data
 now, i see that the audio is being captured, but I want some responses from the agents.
 Also, I want to read files pdf msword excel and csv.
 
+I want to refine the architecture of this app in terms of human recording, when i click start recording, the other agents must stop conversing and when i click stop recording the 4 agents should take into account the human input and continue the conversation.
+
+Currently the model blatantly outputs pieces from the uploaded data instead of generating valuable inferences. Also we want to keep an eye out for the source of this information which needs to be displayed in the interactive context tab.
+
+
+
