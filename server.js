@@ -145,6 +145,54 @@ loadPrivateData().then(() => {
             return null;
         }
 
+        async function extractInsights(personaName, text) {
+            if (!text || text.trim().length === 0) return null;
+            try {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+                const prompt = `You are a live data extractor for a private equity audio war-room. 
+The AI persona "${personaName}" just said: "${text}"
+
+Extract the key numerical facts, insights, and potential chart data that they discussed. 
+Respond ONLY with a valid JSON document adhering exactly to this schema without markdown blocks:
+{
+  "insights": [
+    { "label": "Short label (e.g. Revenue Q2-2026)", "value": "Value (e.g. 109213AED)" }
+  ],
+  "chartData": {
+    "title": "Chart Title (e.g. EBITDA vs CAC Trend)",
+    "type": "bar" | "line",
+    "xAxisKey": "string (the key in data used for the x-axis, usually 'name')",
+    "data": [
+       { "name": "Q1", "value1": 100, "value2": 50 }
+    ],
+    "lines": [
+       { "key": "value1", "color": "#34d399", "name": "Metric 1" },
+       { "key": "value2", "color": "#f87171", "name": "Metric 2" }
+    ]
+  }
+}
+If there is no clear chart data implicitly or explicitly mentioned, set "chartData" to null.
+Keep insights to a maximum of 3 items. Extract intelligently. Make the color theme fit a dark mode UI.`;
+
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                        generationConfig: { temperature: 0.1, responseMimeType: "application/json" }
+                    })
+                });
+                const data = await response.json();
+                const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+                if (rawText) {
+                     return JSON.parse(rawText);
+                }
+            } catch (e) {
+                console.error("[PROXY] Dashboard Extractor failed: ", e);
+            }
+            return null;
+        }
+
         // Connect 4 websockets
         personas.forEach((persona, index) => {
             const ws = new WebSocket(WS_URL);
@@ -205,6 +253,17 @@ loadPrivateData().then(() => {
 
                                 const previousTranscript = currentTurnTranscript;
                                 currentTurnTranscript = ""; // Reset for next person
+
+                                // Async extract insights for the side panel immediately upon turn complete
+                                extractInsights(persona.name, previousTranscript).then(insightData => {
+                                    if (insightData && clientWs.readyState === WebSocket.OPEN) {
+                                         console.log(`[PROXY] Extracted Insights for ${persona.name}. Broadcasting to UI.`);
+                                         clientWs.send(JSON.stringify({
+                                             type: 'insightData',
+                                             data: insightData
+                                         }));
+                                    }
+                                });
 
                                 if (!isHumanSpeaking) {
                                     console.log(`[PROXY] Sending turnComplete signal to browser to await audio playback...`);

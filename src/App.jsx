@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import './App.css';
 
 function App() {
@@ -9,6 +10,8 @@ function App() {
   const [activePersona, setActivePersona] = useState('Financial Analyst');
   const activePersonaRef = useRef('Financial Analyst');
   const [isConnected, setIsConnected] = useState(false);
+  const [insights, setInsights] = useState([]);
+  const [chartData, setChartData] = useState(null);
 
   // ---- Server Boot Polling ----
   const [serverStatus, setServerStatus] = useState({
@@ -79,6 +82,17 @@ function App() {
         if (parsed.type === 'activeAgent') {
              console.log(`[DEBUG] Proxy signaled active agent: ${parsed.name}`);
              updatePersona(parsed.name);
+             return;
+        }
+
+        if (parsed.type === 'insightData') {
+             console.log("[DEBUG] Received Insight Data:", parsed.data);
+             if (parsed.data.insights && parsed.data.insights.length > 0) {
+                 setInsights(parsed.data.insights);
+             }
+             if (parsed.data.chartData) {
+                 setChartData(parsed.data.chartData);
+             }
              return;
         }
 
@@ -703,23 +717,77 @@ function App() {
          </div>
 
          <div style={{ flex: 1, padding: '1.5rem', overflowY: 'auto' }}>
-            <h3 style={{ fontSize: '1rem', fontWeight: 500, marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              EBITDA vs CAC Trend
-              <span style={{ fontSize: '0.75rem', background: 'rgba(94, 106, 210, 0.2)', color: 'var(--accent-hover)', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>From Private Data</span>
-            </h3>
+            {/* Dynamic Recharts Chart Area or Fallback Mock */ }
+            {chartData ? (
+               <>
+                 <h3 style={{ fontSize: '1rem', fontWeight: 500, marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                   {chartData.title}
+                   <span style={{ fontSize: '0.75rem', background: 'rgba(94, 106, 210, 0.2)', color: 'var(--accent-hover)', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>Extracted Insight</span>
+                 </h3>
+                 <div style={{ height: '220px', background: 'linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', padding: '1rem 1rem 1rem 0', marginBottom: '1.5rem', position: 'relative', overflow: 'hidden' }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                        {chartData.type === 'bar' ? (
+                            <BarChart data={chartData.data}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" vertical={false} />
+                                <XAxis dataKey={chartData.xAxisKey || 'name'} stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
+                                <YAxis stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
+                                <Tooltip contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white' }} itemStyle={{ color: 'white' }} cursor={{ fill: 'rgba(255,255,255,0.05)' }} />
+                                <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+                                {chartData.lines && chartData.lines.map((line, idx) => (
+                                    <Bar key={idx} dataKey={line.key} name={line.name} fill={line.color || 'var(--accent-primary)'} radius={[4, 4, 0, 0]} />
+                                ))}
+                            </BarChart>
+                        ) : (
+                            <LineChart data={chartData.data}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" vertical={false} />
+                                <XAxis dataKey={chartData.xAxisKey || 'name'} stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
+                                <YAxis stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
+                                <Tooltip contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: 'white' }} itemStyle={{ color: 'white' }} />
+                                <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+                                {chartData.lines && chartData.lines.map((line, idx) => (
+                                    <Line key={idx} type="monotone" dataKey={line.key} name={line.name} stroke={line.color || 'var(--accent-primary)'} strokeWidth={3} dot={{ r: 4, fill: line.color || 'var(--accent-primary)', strokeWidth: 2, stroke: 'var(--bg-dark)' }} activeDot={{ r: 6 }} />
+                                ))}
+                            </LineChart>
+                        )}
+                    </ResponsiveContainer>
+                 </div>
+               </>
+            ) : (
+                <>
+                    <h3 style={{ fontSize: '1rem', fontWeight: 500, marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      EBITDA vs CAC Trend
+                      <span style={{ fontSize: '0.75rem', background: 'rgba(94, 106, 210, 0.2)', color: 'var(--accent-hover)', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>From Private Data</span>
+                    </h3>
+                    <div style={{ height: '180px', background: 'linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', padding: '1rem', marginBottom: '1.5rem', position: 'relative', overflow: 'hidden' }}>
+                      <div style={{ position: 'absolute', bottom: '1rem', left: '1rem', right: '1rem', height: '100px', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+                         <div style={{ width: '15%', height: '80%', background: 'rgba(52, 211, 153, 0.6)', borderRadius: '4px' }}></div>
+                         <div style={{ width: '15%', height: '70%', background: 'rgba(52, 211, 153, 0.6)', borderRadius: '4px' }}></div>
+                         <div style={{ width: '15%', height: '55%', background: 'rgba(52, 211, 153, 0.6)', borderRadius: '4px' }}></div>
+                         <div style={{ width: '15%', height: '40%', background: 'rgba(251, 191, 36, 0.6)', borderRadius: '4px' }}></div>
+                         <div style={{ width: '15%', height: '30%', background: 'rgba(248, 113, 113, 0.6)', borderRadius: '4px' }}></div>
+                      </div>
+                      <div style={{ position: 'absolute', top: '10px', right: '10px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>EBITDA Margins</div>
+                    </div>
+                </>
+            )}
 
-            {/* Mock Chart Area */}
-            <div style={{ height: '180px', background: 'linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', padding: '1rem', marginBottom: '1.5rem', position: 'relative', overflow: 'hidden' }}>
-              {/* Very Basic Mock Graph using CSS */}
-              <div style={{ position: 'absolute', bottom: '1rem', left: '1rem', right: '1rem', height: '100px', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
-                 <div style={{ width: '15%', height: '80%', background: 'rgba(52, 211, 153, 0.6)', borderRadius: '4px' }}></div>
-                 <div style={{ width: '15%', height: '70%', background: 'rgba(52, 211, 153, 0.6)', borderRadius: '4px' }}></div>
-                 <div style={{ width: '15%', height: '55%', background: 'rgba(52, 211, 153, 0.6)', borderRadius: '4px' }}></div>
-                 <div style={{ width: '15%', height: '40%', background: 'rgba(251, 191, 36, 0.6)', borderRadius: '4px' }}></div>
-                 <div style={{ width: '15%', height: '30%', background: 'rgba(248, 113, 113, 0.6)', borderRadius: '4px' }}></div>
-              </div>
-              <div style={{ position: 'absolute', top: '10px', right: '10px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>EBITDA Margins</div>
-            </div>
+            {/* Dynamic Key Elements Section */}
+            {insights.length > 0 && (
+                <>
+                    <h3 style={{ fontSize: '1rem', fontWeight: 500, marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      Key Elements
+                      <span style={{ fontSize: '0.75rem', background: 'rgba(52, 211, 153, 0.2)', color: 'var(--success)', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>Live Inference</span>
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+                        {insights.map((insight, idx) => (
+                            <div key={idx} style={{ background: 'rgba(255,255,255,0.03)', padding: '0.75rem 1rem', borderRadius: '8px', borderLeft: '3px solid var(--success)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{insight.label}</span>
+                                <span style={{ fontSize: '0.95rem', fontWeight: 600, color: 'white' }}>{insight.value}</span>
+                            </div>
+                        ))}
+                    </div>
+                </>
+            )}
 
             <h3 style={{ fontSize: '1rem', fontWeight: 500, marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               Relevant News Stream
