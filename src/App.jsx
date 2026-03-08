@@ -4,6 +4,7 @@ import './App.css';
 function App() {
   const [messages, setMessages] = useState([]);
   const [isRecording, setIsRecording] = useState(false);
+  const isRecordingRef = useRef(false);
   const [hasStartedDebate, setHasStartedDebate] = useState(false);
   const [activePersona, setActivePersona] = useState('Financial Analyst');
   const activePersonaRef = useRef('Financial Analyst');
@@ -44,6 +45,7 @@ function App() {
   const stream = useRef(null);
   const scriptNode = useRef(null);
   const messagesEndRef = useRef(null);
+  const pendingTextRef = useRef('');
 
   const personas = {
     'Financial Analyst': "You are an expert private equity financial analyst reviewing a deal in a live war room. Focus on revenue, margins, and EBITDA. Only speak out loud. Keep answers under 2 sentences.",
@@ -80,30 +82,54 @@ function App() {
 
         if (parsed.type === 'turnComplete') {
              console.log(`[DEBUG] Received turnComplete for ${parsed.name}. Calculating audio queue drain time...`);
+             const completedText = pendingTextRef.current;
+             pendingTextRef.current = ''; // Reset for the next speaker
+
              if (playbackAudioContext.current) {
                  const currentTime = playbackAudioContext.current.currentTime;
                  const delaySeconds = Math.max(0, audioQueueTime.current - currentTime);
-                 console.log(`[DEBUG] Audio will finish playing in ${delaySeconds.toFixed(1)} seconds.`);
+                 console.log(`[DEBUG] Audio will finish playing in ${delaySeconds.toFixed(1)} seconds. Blocking UI update until then.`);
 
+                 // 1. Wait for audio to finish playing, then show the text blob
                  setTimeout(() => {
-                     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-                         console.log(`[DEBUG] Audio drained. Telling proxy to advance the debate.`);
-                         ws.current.send(JSON.stringify({
-                             clientContent: {
-                                 action: 'audioFinished',
-                                 transcript: parsed.transcript
-                             }
-                         }));
+                     // Add the completed text to the UI
+                     if (completedText.trim()) {
+                         setMessages(prev => [...prev, {
+                             id: Date.now() + Math.random(),
+                             sender: parsed.name + ' AI',
+                             role: 'bot',
+                             initials: 'AI',
+                             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                             text: completedText
+                         }]);
                      }
+
+                     // 2. Add an explicit 2-second conversational pause before triggering the next agent
+                     setTimeout(() => {
+                         if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+                             console.log(`[DEBUG] Conversation delay complete. Telling proxy to advance the debate.`);
+                             ws.current.send(JSON.stringify({
+                                 clientContent: {
+                                     action: 'audioFinished',
+                                     transcript: parsed.transcript
+                                 }
+                             }));
+                         }
+                     }, 2000);
+
                  }, delaySeconds * 1000 + 500); // Add 500ms safety buffer
              } else {
-                 // Audio context hasn't been initialized yet (e.g. they didn't hit connect)
-                 // Still pass the turn so the text logs keep moving
+                 // Fallback if audio never engaged
+                 if (completedText.trim()) {
+                     setMessages(prev => [...prev, {
+                         id: Date.now() + Math.random(), sender: parsed.name + ' AI', role: 'bot', initials: 'AI', time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), text: completedText
+                     }]);
+                 }
                  setTimeout(() => {
                      if (ws.current && ws.current.readyState === WebSocket.OPEN) {
                          ws.current.send(JSON.stringify({ clientContent: { action: 'audioFinished', transcript: parsed.transcript } }));
                      }
-                 }, 4000); // Artificial 4 sec reading delay if no audio is playing
+                 }, 4000); // Artificial 4 sec reading delay
              }
              return;
         }
@@ -111,17 +137,9 @@ function App() {
         if (parsed.serverContent && parsed.serverContent.modelTurn) {
             const parts = parsed.serverContent.modelTurn.parts;
             for (const part of parts) {
-                // 1. Check for text transcript to show in UI
+                // 1. Buffer text silently so it doesn't appear before audio finishes
                 if (part.text) {
-                     console.log(`[DEBUG] Received text response from Gemini: "${part.text.substring(0, 30)}..."`);
-                     setMessages(prev => [...prev, {
-                        id: Date.now() + Math.random(),
-                        sender: activePersonaRef.current + ' AI',
-                        role: 'bot',
-                        initials: 'AI',
-                        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                        text: part.text
-                     }]);
+                     pendingTextRef.current += part.text;
                 }
 
                 // 2. Check for audio chunks to play back
@@ -228,11 +246,11 @@ function App() {
       }
       audioQueueTime.current = 0; // Reset queue time
 
-      ws.current.send(JSON.stringify({ 
-          clientContent: { 
-              action: 'sendText', 
-              text: textInput 
-          } 
+      ws.current.send(JSON.stringify({
+          clientContent: {
+              action: 'sendText',
+              text: textInput
+          }
       }));
 
       setMessages(prev => [...prev, {
@@ -257,11 +275,11 @@ function App() {
                }
            }
            audioQueueTime.current = playbackAudioContext.current.currentTime;
-           
+
            if (ws.current && ws.current.readyState === WebSocket.OPEN) {
                ws.current.send(JSON.stringify({ clientContent: { action: 'kickOff' } }));
            }
-           
+
            setHasStartedDebate(true);
            setMessages(prev => [...prev, {
               id: Date.now(),
@@ -282,84 +300,78 @@ function App() {
         playbackAudioContext.current = null;
     }
     audioQueueTime.current = 0; // Reset queue time
-    
+
     startAudioCapture();
   };
 
   const startAudioCapture = async () => {
      try {
-      console.log('Requesting microphone access...');
-      stream.current = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!recordingAudioContext.current) {
+      setIsRecording(true);
+      isRecordingRef.current = true;
+
+      // Only build the WebAudio graph if it doesn't already exist
+      if (!stream.current) {
+          console.log('Requesting microphone access...');
+          stream.current = await navigator.mediaDevices.getUserMedia({ audio: true });
           recordingAudioContext.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-      }
 
-      // ---- Setup Speech Recognition for visual feedback ----
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (SpeechRecognition) {
-          recognitionRef.current = new SpeechRecognition();
-          recognitionRef.current.continuous = true;
-          recognitionRef.current.interimResults = true;
+          // ---- Setup Speech Recognition for visual feedback ----
+          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+          if (SpeechRecognition) {
+              recognitionRef.current = new SpeechRecognition();
+              recognitionRef.current.continuous = true;
+              recognitionRef.current.interimResults = true;
 
-          recognitionRef.current.onresult = (event) => {
-              let final = "";
-              let interim = "";
-              for (let i = event.resultIndex; i < event.results.length; ++i) {
-                  if (event.results[i].isFinal) {
-                      final += event.results[i][0].transcript;
-                  } else {
-                      interim += event.results[i][0].transcript;
+              recognitionRef.current.onresult = (event) => {
+                  if (!isRecordingRef.current) return;
+
+                  let final = "";
+                  let interim = "";
+                  for (let i = event.resultIndex; i < event.results.length; ++i) {
+                      if (event.results[i].isFinal) final += event.results[i][0].transcript;
+                      else interim += event.results[i][0].transcript;
                   }
-              }
-              setInterimTranscript(interim);
+                  setInterimTranscript(interim);
 
-              if (final) {
-                  setMessages(prev => [...prev, {
-                      id: Date.now() + Math.random(),
-                      sender: 'Deepak (Associate)',
-                      role: 'human',
-                      initials: 'D',
-                      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                      text: final
-                  }]);
-                  setInterimTranscript(''); // clear interim once final
-              }
+                  if (final) {
+                      setMessages(prev => [...prev, {
+                          id: Date.now() + Math.random(),
+                          sender: 'Deepak (Associate)',
+                          role: 'human',
+                          initials: 'D',
+                          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                          text: final
+                      }]);
+                      setInterimTranscript('');
+                  }
+              };
+          }
+
+          const source = recordingAudioContext.current.createMediaStreamSource(stream.current);
+          await recordingAudioContext.current.audioWorklet.addModule('/pcm-worker.js');
+          scriptNode.current = new AudioWorkletNode(recordingAudioContext.current, 'pcm-processor');
+
+          scriptNode.current.port.onmessage = (event) => {
+             // Silently drop PCM packets if we are physically muted
+             if (!isRecordingRef.current) return;
+
+             const rawPcmBuffer = event.data;
+             const base64Audio = btoa(String.fromCharCode(...new Uint8Array(rawPcmBuffer)));
+
+             if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+                 ws.current.send(JSON.stringify({
+                     realtimeInput: { mediaChunks: [{ mimeType: "audio/pcm;rate=16000", data: base64Audio }] }
+                 }));
+             }
           };
 
-          recognitionRef.current.start();
+          source.connect(scriptNode.current);
+          scriptNode.current.connect(recordingAudioContext.current.destination);
       }
 
-      const source = recordingAudioContext.current.createMediaStreamSource(stream.current);
-
-      // Upgrade to AudioWorkletNode to handle raw PCM conversions without locking the UI thread
-      await recordingAudioContext.current.audioWorklet.addModule('/pcm-worker.js');
-      scriptNode.current = new AudioWorkletNode(recordingAudioContext.current, 'pcm-processor');
-
-      scriptNode.current.port.onmessage = (event) => {
-        const rawPcmBuffer = event.data; // This is an ArrayBuffer containing Int16 PCM
-
-        const base64Audio = btoa(
-           String.fromCharCode(...new Uint8Array(rawPcmBuffer))
-        );
-
-        if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-             const message = {
-                 realtimeInput: {
-                     mediaChunks: [{
-                         mimeType: "audio/pcm;rate=16000",
-                         data: base64Audio
-                     }]
-                 }
-             };
-             ws.current.send(JSON.stringify(message));
-             console.log(`[DEBUG] Sent audio chunk (${base64Audio.length} bytes) to Gemini Proxy.`);
-        }
-      };
-
-      source.connect(scriptNode.current);
-      scriptNode.current.connect(recordingAudioContext.current.destination);
-
-      setIsRecording(true);
+      if (recognitionRef.current) {
+          try { recognitionRef.current.start(); } catch(e){}
+      }
 
       if (ws.current && ws.current.readyState === WebSocket.OPEN) {
           ws.current.send(JSON.stringify({ clientContent: { action: 'startRecording' } }));
@@ -376,35 +388,26 @@ function App() {
     } catch (err) {
       console.error('Error accessing microphone:', err);
       alert('Could not access microphone. Ensure you are on HTTPS or localhost.');
+      setIsRecording(false);
+      isRecordingRef.current = false;
     }
   };
 
   const stopRecording = () => {
-    if (scriptNode.current) {
-      // Explicitly nullify the onmessage listener BEFORE disconnecting to immediately stop console spam
-      scriptNode.current.port.onmessage = null;
-      scriptNode.current.disconnect();
-      scriptNode.current = null;
-    }
-    if (stream.current) {
-      stream.current.getTracks().forEach(track => track.stop());
-      stream.current = null;
-    }
-    // We intentionally DO NOT close playbackAudioContext.current here!
-    
+    isRecordingRef.current = false;
+    setIsRecording(false);
+
     if (recognitionRef.current) {
         recognitionRef.current.stop();
         setInterimTranscript('');
     }
 
-    // Explicitly tell the server proxy that the human override is over
-    if (ws.current && ws.current.readyState === WebSocket.OPEN && isRecording) {
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
         console.log("[DEBUG] Sending stop sequence to Proxy.");
         ws.current.send(JSON.stringify({ clientContent: { action: 'stopRecording' } }));
     }
 
-    setIsRecording(false);
-    console.log("[DEBUG] Recording stopped. Audio tracks and context closed.");
+    console.log("[DEBUG] Recording paused. Microphone graph kept hot for seamless resume.");
   };
 
   const scrollToBottom = () => {
@@ -565,18 +568,18 @@ function App() {
         <div style={{ padding: '1.5rem', borderTop: '1px solid var(--glass-border)' }}>
           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
             {!hasStartedDebate ? (
-               <button 
+               <button
                   onClick={startDebate}
-                  style={{ 
-                    background: 'var(--success)', 
-                    color: 'white', 
-                    border: 'none', 
-                    borderRadius: '24px', 
-                    padding: '0.75rem 2rem', 
-                    cursor: 'pointer', 
-                    fontWeight: 600, 
-                    display: 'flex', 
-                    alignItems: 'center', 
+                  style={{
+                    background: 'var(--success)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '24px',
+                    padding: '0.75rem 2rem',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
                     gap: '0.5rem',
                     transition: 'all 0.2s',
                     boxShadow: '0 4px 14px 0 rgba(52, 211, 153, 0.39)'
@@ -585,36 +588,36 @@ function App() {
                </button>
             ) : (
                <form onSubmit={handleSendText} style={{ display: 'flex', width: '100%', gap: '10px', alignItems: 'center' }}>
-                   <input 
-                      type="text" 
+                   <input
+                      type="text"
                       value={textInput}
                       onChange={(e) => setTextInput(e.target.value)}
                       placeholder="Type a message to the War Room..."
-                      style={{ 
-                          flex: 1, 
-                          background: 'rgba(255,255,255,0.05)', 
-                          border: '1px solid var(--glass-border)', 
-                          color: 'white', 
-                          padding: '0.75rem 1rem', 
+                      style={{
+                          flex: 1,
+                          background: 'rgba(255,255,255,0.05)',
+                          border: '1px solid var(--glass-border)',
+                          color: 'white',
+                          padding: '0.75rem 1rem',
                           borderRadius: '24px',
                           outline: 'none',
                           fontSize: '0.95rem'
                       }}
                    />
-                   <button 
+                   <button
                       type="submit"
                       disabled={!textInput.trim()}
-                      style={{ 
-                          background: textInput.trim() ? 'var(--accent-primary)' : 'rgba(255,255,255,0.1)', 
-                          color: textInput.trim() ? 'white' : 'rgba(255,255,255,0.3)', 
-                          border: 'none', 
-                          borderRadius: '50%', 
-                          width: '42px', 
-                          height: '42px', 
-                          display: 'flex', 
-                          justifyContent: 'center', 
+                      style={{
+                          background: textInput.trim() ? 'var(--accent-primary)' : 'rgba(255,255,255,0.1)',
+                          color: textInput.trim() ? 'white' : 'rgba(255,255,255,0.3)',
+                          border: 'none',
+                          borderRadius: '50%',
+                          width: '42px',
+                          height: '42px',
+                          display: 'flex',
+                          justifyContent: 'center',
                           alignItems: 'center',
-                          cursor: textInput.trim() ? 'pointer' : 'not-allowed', 
+                          cursor: textInput.trim() ? 'pointer' : 'not-allowed',
                           transition: 'all 0.2s',
                           boxShadow: textInput.trim() ? '0 4px 14px 0 rgba(94, 106, 210, 0.39)' : 'none',
                           flexShrink: 0
@@ -622,19 +625,19 @@ function App() {
                       ↗️
                    </button>
                    {isRecording ? (
-                       <button 
+                       <button
                           type="button"
                           onClick={stopRecording}
-                          style={{ 
-                            background: 'rgba(248, 113, 113, 0.2)', 
-                            color: 'var(--danger)', 
-                            border: '1px solid var(--danger)', 
-                            borderRadius: '24px', 
-                            padding: '0.75rem 1.5rem', 
-                            cursor: 'pointer', 
-                            fontWeight: 600, 
-                            display: 'flex', 
-                            alignItems: 'center', 
+                          style={{
+                            background: 'rgba(248, 113, 113, 0.2)',
+                            color: 'var(--danger)',
+                            border: '1px solid var(--danger)',
+                            borderRadius: '24px',
+                            padding: '0.75rem 1.5rem',
+                            cursor: 'pointer',
+                            fontWeight: 600,
+                            display: 'flex',
+                            alignItems: 'center',
                             gap: '0.5rem',
                             transition: 'all 0.2s',
                             flexShrink: 0
@@ -643,19 +646,19 @@ function App() {
                           Stop Mic
                        </button>
                     ) : (
-                       <button 
+                       <button
                           type="button"
                           onClick={startRecording}
-                          style={{ 
-                            background: 'rgba(255,255,255,0.1)', 
-                            color: 'white', 
-                            border: '1px solid rgba(255,255,255,0.2)', 
-                            borderRadius: '24px', 
-                            padding: '0.75rem 1.5rem', 
-                            cursor: 'pointer', 
-                            fontWeight: 600, 
-                            display: 'flex', 
-                            alignItems: 'center', 
+                          style={{
+                            background: 'rgba(255,255,255,0.1)',
+                            color: 'white',
+                            border: '1px solid rgba(255,255,255,0.2)',
+                            borderRadius: '24px',
+                            padding: '0.75rem 1.5rem',
+                            cursor: 'pointer',
+                            fontWeight: 600,
+                            display: 'flex',
+                            alignItems: 'center',
                             gap: '0.5rem',
                             transition: 'all 0.2s',
                             flexShrink: 0

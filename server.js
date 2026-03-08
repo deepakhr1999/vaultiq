@@ -174,25 +174,20 @@ loadPrivateData().then(() => {
                             if (parsed.serverContent.turnComplete) {
                                 console.log(`[PROXY] ${persona.name} finished generating text.`);
 
-                                if (currentTurnTranscript.trim().length > 0) {
-                                    const previousTranscript = currentTurnTranscript;
-                                    currentTurnTranscript = ""; // Reset for next person
+                                const previousTranscript = currentTurnTranscript;
+                                currentTurnTranscript = ""; // Reset for next person
 
-                                    if (!isHumanSpeaking) {
-                                        console.log(`[PROXY] Sending turnComplete signal to browser to await audio playback...`);
-                                        if (clientWs.readyState === WebSocket.OPEN) {
-                                            clientWs.send(JSON.stringify({
-                                                type: 'turnComplete',
-                                                name: persona.name,
-                                                transcript: previousTranscript
-                                            }));
-                                        }
-                                    } else {
-                                        console.log(`[PROXY] Halting turn-pass because Human override is active.`);
+                                if (!isHumanSpeaking) {
+                                    console.log(`[PROXY] Sending turnComplete signal to browser to await audio playback...`);
+                                    if (clientWs.readyState === WebSocket.OPEN) {
+                                        clientWs.send(JSON.stringify({
+                                            type: 'turnComplete',
+                                            name: persona.name,
+                                            transcript: previousTranscript
+                                        }));
                                     }
                                 } else {
-                                    // Edge case: Agent finished but said nothing
-                                    currentTurnTranscript = "";
+                                    console.log(`[PROXY] Halting turn-pass because Human override is active.`);
                                 }
                             }
                         }
@@ -251,9 +246,18 @@ loadPrivateData().then(() => {
                     console.log(`[PROXY] Human override ended. Passing turn back to Active Agent.`);
                     isHumanSpeaking = false;
                     
-                    // Explicitly tell the active Gemini agent the human audio stream finished.
+                    // Explicitly tell the active Gemini agent the human audio stream finished and they MUST reply.
                     if (agentSockets[activeAgentIndex] && agentSockets[activeAgentIndex].readyState === WebSocket.OPEN) {
-                        agentSockets[activeAgentIndex].send(JSON.stringify({ clientContent: { turnComplete: true } }));
+                        const humanOverrideTrigger = {
+                            clientContent: {
+                                turns: [{
+                                    role: "user",
+                                    parts: [{ text: "I just finished speaking to you. Evaluate the audio I just sent and respond directly. Keep it under 2 sentences." }]
+                                }],
+                                turnComplete: true
+                            }
+                        };
+                        agentSockets[activeAgentIndex].send(JSON.stringify(humanOverrideTrigger));
                     }
                     return;
                 } else if (parsed.clientContent && parsed.clientContent.action === 'sendText') {
